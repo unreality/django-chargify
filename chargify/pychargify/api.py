@@ -47,10 +47,15 @@ class ChargifyError(Exception):
     A Chargify Releated error
     @license    GNU General Public License
     """
+    errors = []
+    xml = None
     def __init__(self, xml = None, **kwargs):
         self.xml = xml
-        if xml:
-            self.errors = self._parse_errors(xml)
+        if xml and xml.strip():
+            try:
+                self.errors = self._parse_errors(xml)
+            except:
+                pass
     
     def _get_node_text(self, node):
         s = ''
@@ -72,6 +77,7 @@ class ChargifyError(Exception):
                 if val.strip():
                     errors.append(val)
         return errors
+    
 
 class ChargifyUnAuthorized(ChargifyError):
     """
@@ -209,32 +215,36 @@ class ChargifyBase(object):
             "User-Agent": "pyChargify",
             "Content-Type": "text/xml"
         }
-        
         r = httplib.HTTPSConnection(self.request_host)
         r.request('GET', url, None, headers)
         response = r.getresponse()
         
+        val = None
+        try:
+            val = response.read()
+        except:
+            pass
         # Unauthorized Error
         if response.status == 401:
-            raise ChargifyUnAuthorized()
+            raise ChargifyUnAuthorized(val)
         
         # Forbidden Error
         elif response.status == 403:
-            raise ChargifyForbidden()
+            raise ChargifyForbidden(val)
         
         # Not Found Error
         elif response.status == 404:
-            raise ChargifyNotFound()
+            raise ChargifyNotFound(val)
         
         # Unprocessable Entity Error
         elif response.status == 422:
-            raise ChargifyUnProcessableEntity(response.read())
+            raise ChargifyUnProcessableEntity(val)
         
         # Generic Server Errors
         elif response.status in [405, 500]:
-            raise ChargifyServerError()
+            raise ChargifyServerError(val)
         
-        return response.read()
+        return val
         
     def _post(self, url, data):
         """
@@ -281,15 +291,15 @@ class ChargifyBase(object):
         
         # Unauthorized Error
         if response.status == 401:
-            raise ChargifyUnAuthorized()
+            raise ChargifyUnAuthorized(val)
         
         # Forbidden Error
         elif response.status == 403:
-            raise ChargifyForbidden()
+            raise ChargifyForbidden(val)
         
         # Not Found Error
         elif response.status == 404:
-            raise ChargifyNotFound()
+            raise ChargifyNotFound(val)
         
         # Unprocessable Entity Error
         elif response.status == 422:
@@ -313,8 +323,9 @@ class ChargifyBase(object):
             'year': datetime.datetime.today().year
         }
         
-        if self.id:
-            obj = self._applyS(self._put('/' + url + '/' + self.id + '.xml', dom.toxml(encoding="utf-8")), self.__name__, node_name)
+        if self.id is not None:
+            id = str(self.id)
+            obj = self._applyS(self._put('/' + url + '/' + id + '.xml', dom.toxml(encoding="utf-8")), self.__name__, node_name)
             if obj:
                 if type(obj.updated_at) == datetime.datetime:
                     if (obj.updated_at.day == request_made['day']) and (obj.updated_at.month == request_made['month']) and (obj.updated_at.year == request_made['year']):
@@ -370,8 +381,8 @@ class ChargifyCustomer(ChargifyBase):
         return obj.getByCustomerId(self.id)
     
     def _toxml(self, dom):
-        if self.id is not None:
-            node = minidom.Element("customer_id")
+        if self.id is not None and self.__xmlnodename__ == 'customer_id':
+            node = minidom.Element(self.__xmlnodename__)
             node_txt = dom.createTextNode(str(self.id))
             node.appendChild(node_txt)
             return node

@@ -1,9 +1,10 @@
-from chargify.chargify_settings import CHARGIFY, CHARGIFY_CC_TYPES
+from chargify_settings import CHARGIFY, CHARGIFY_CC_TYPES
 from decimal import Decimal
 from django.contrib.auth.models import User
 from django.db import models
-from chargify.pychargify.api import ChargifyNotFound
+from pychargify.api import ChargifyNotFound
 import logging
+import traceback
 log = logging.getLogger("chargify")
 logging.basicConfig(level=logging.DEBUG)
 
@@ -41,13 +42,18 @@ class ChargifyBaseManager(models.Manager):
     
     def get_or_load(self, chargify_id):
         self._check_api()
+        val = None
+        loaded = False
         try:
             val = self.get(chargify_id = chargify_id)
             loaded = False
         except:
-            api = self.api.getById(chargify_id)
-            val = self.model().load(api)
-            loaded = True
+            pass
+        finally:
+            if val is None:
+                api = self.api.getById(chargify_id)
+                val = self.model().load(api)
+                loaded = True
         return val, loaded
     
     def load_and_update(self, chargify_id):
@@ -136,7 +142,9 @@ class Customer(models.Model, ChargifyBaseModel):
             saved = False
             try:
                 saved, customer = self.api.save()
-            except ChargifyNotFound:
+            except ChargifyNotFound, e:
+                for error in e.errors:
+                    log.exception(error)
                 api = self.api
                 api.id = None
                 saved, customer = api.save()
@@ -171,7 +179,7 @@ class Customer(models.Model, ChargifyBaseModel):
             self.chargify_updated_at = api.modified_at
             self.chargify_created_at = api.created_at
             if commit:
-                return self.save()
+                self.save()
         else:
             log.debug('Not loading api')
         return self
@@ -197,6 +205,19 @@ class ProductManager(ChargifyBaseManager):
     def _api(self):
         return self.gateway.Product()
     api = property(_api)
+    
+    def update_all(self):
+        products = {}
+        for product in self.gateway.Product().getAll():
+            try:
+                p, loaded = self.get_or_load(product.id)
+                if not loaded:
+                    p.update()
+                p.save()
+                products[product.handle] = p
+            except:
+                log.error('Failed to load product: %s' %(product))
+                log.error(traceback.format_exc())
 
 class Product(models.Model, ChargifyBaseModel):
     MONTH = 'month'
@@ -249,7 +270,7 @@ class Product(models.Model, ChargifyBaseModel):
         self.interval_unit = api.interval_unit
         self.interval = api.interval
         if commit:
-            return self.save()
+            self.save()
         return self
     
     def update(self, commit = True):
@@ -333,7 +354,7 @@ class CreditCard(models.Model, ChargifyBaseModel):
         self.expiration_year = api.expiration_year
         self.credit_type = api.type
         if commit:
-            return self.save(save_api = False)
+            self.save(save_api = False)
         return self
     
     def update(self, commit=True):
@@ -373,13 +394,7 @@ class SubscriptionManager(ChargifyBaseManager):
     def update_all(self):
         """ You should only run this when you first install the product!
         VERY EXPENSIVE!!! """
-        products = {}
-        for product in self.gateway.Product().getAll():
-            p, loaded = Product.objects.get_or_load(product.id)
-            if not loaded:
-                p.update()
-            p.save()
-            products[product.handle] = p
+        Product.objects.update_all()
         
         for customer in self.gateway.Customer().getAll():
             c, loaded = Customer.objects.get_or_load(customer.id)
@@ -498,7 +513,7 @@ class Subscription(models.Model, ChargifyBaseModel):
             credit_card = CreditCard()
             credit_card.load(api.credit_card)
         if commit:
-            return self.save()
+            self.save()
         return self
     
     def update(self, commit=True):
@@ -528,7 +543,10 @@ class Subscription(models.Model, ChargifyBaseModel):
             subscription.id = str(self.chargify_id)
         subscription.product = self.product.api
         subscription.product_handle = self.product_handle
-        subscription.customer = self.customer._api('customer_attributes')
+        if self.customer.chargify_id is None:
+            subscription.customer = self.customer._api('customer_attributes')
+        else:
+            subscription.customer = self.customer._api('customer_id')
         subscription.credit_card = self.credit_card._api('credit_card_attributes')
         return subscription
     api = property(_api)
