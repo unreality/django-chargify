@@ -5,7 +5,7 @@ from django.db import models
 from chargify.pychargify.api import ChargifyNotFound
 import logging
 log = logging.getLogger("chargify")
-#logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.DEBUG)
 
 
 class ChargifyBaseModel(object):
@@ -127,7 +127,12 @@ class Customer(models.Model, ChargifyBaseModel):
     reference = property(_reference)
     
     def save(self, save_api = False, **kwargs):
+    
         if save_api:
+            #if we dont have a reference, save now so we get one
+            if self.reference is '':
+                super(Customer, self).save(**kwargs)
+                
             saved = False
             try:
                 saved, customer = self.api.save()
@@ -508,6 +513,13 @@ class Subscription(models.Model, ChargifyBaseModel):
     def upgrade(self, product):
         """ Upgrade / Downgrade products """
         return self.update(self.api.upgrade(product.handle))
+    
+    def cancel(self, message=''):
+        """ Cancel subscription """
+        return self.update(self.api.unsubscribe(message))
+        
+    def reactivate(self):
+        return self.update(self.api.reactivate())
     
     def _api(self, node_name = ''):
         """ Load data into chargify api object """
